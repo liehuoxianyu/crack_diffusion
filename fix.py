@@ -4,22 +4,17 @@ import os
 IN_PATH  = "/CrackTree260/train.jsonl"
 OUT_PATH = "/CrackTree260/train_linux.jsonl"
 
-# 你云平台数据根目录
 LINUX_ROOT = "/CrackTree260"
 
 def win_to_linux(p: str) -> str:
-    # 统一斜杠
     p2 = p.replace("\\", "/")
 
-    # 常见形态：C:/Users/.../CrackTree260/image/xxxx.jpg
-    # 我们只截取 CrackTree260 之后的相对部分
     key = "CrackTree260/"
     idx = p2.lower().find(key.lower())
     if idx != -1:
-        rel = p2[idx + len(key):]  # e.g. image/6192.jpg
+        rel = p2[idx + len(key):]  
         return os.path.join(LINUX_ROOT, rel)
 
-    # 如果没找到关键字，就尽量取最后两级（兜底，不推荐但不至于直接崩）
     return os.path.join(LINUX_ROOT, os.path.basename(p2))
 
 def main():
@@ -34,7 +29,6 @@ def main():
             item["image"] = win_to_linux(item["image"])
             item["conditioning_image"] = win_to_linux(item["conditioning_image"])
 
-            # 简单检查
             ok1 = os.path.exists(item["image"])
             ok2 = os.path.exists(item["conditioning_image"])
             if not (ok1 and ok2):
