@@ -1,0 +1,40 @@
+name: cracktree-controlnet
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip=24.0
+  - numpy=1.26.*
+  - pillow=10.*
+  - opencv=4.9.*
+  - matplotlib=3.8.*
+  - pandas=2.2.*
+  - scikit-image=0.22.*
+  - tqdm=4.66.*
+  - pyyaml=6.0.*
+  - pytorch=2.1.*
+  - torchvision=0.16.*
+  - pytorch-cuda=12.1
+  - pip:
+      # HuggingFace / Diffusers training stack
+      - diffusers==0.25.1
+      - transformers==4.36.2
+      - accelerate==0.26.1
+      - datasets==2.16.1
+      - huggingface_hub==0.20.2
+      - safetensors==0.4.2
+
+      # Diffusers ControlNet training deps
+      - xformers==0.0.22.post7
+      - peft==0.7.1
+      - bitsandbytes==0.41.3
+
+      # Image / logging
+      - tensorboard==2.15.1
+      - einops==0.7.0
+      - scipy==1.11.4
+
+      # Optional: faster file IO / misc
+      - jsonlines==4.0.0
