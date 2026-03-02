@@ -39,6 +39,10 @@ OUTDIR = "/work/outputs/exp_eval_all"
 
 # 性能
 USE_FP16 = True
+
+# LoRA（可选）：仅作用于 UNet，加载顺序 base → controlnet(如有) → lora(如有)
+# 设为 None 或空字符串则不加载；可为目录或 .safetensors 文件路径
+LORA_PATH = None  # e.g. "/work/outputs/exp_lora_realism" or "/work/outputs/exp_lora_realism/pytorch_lora_weights.safetensors"
 # ============================================================
 
 
@@ -76,7 +80,10 @@ def load_sd_pipe(device, dtype):
     pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
     if device == "cuda":
         pipe.enable_xformers_memory_efficient_attention()
-    return pipe.to(device)
+    pipe = pipe.to(device)
+    if LORA_PATH and os.path.exists(LORA_PATH):
+        pipe.load_lora_weights(LORA_PATH)
+    return pipe
 
 
 def load_cn_pipe(controlnet_dir, device, dtype):
@@ -90,7 +97,10 @@ def load_cn_pipe(controlnet_dir, device, dtype):
     pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
     if device == "cuda":
         pipe.enable_xformers_memory_efficient_attention()
-    return pipe.to(device)
+    pipe = pipe.to(device)
+    if LORA_PATH and os.path.exists(LORA_PATH):
+        pipe.load_lora_weights(LORA_PATH)
+    return pipe
 
 
 @torch.inference_mode()
@@ -166,6 +176,10 @@ def main():
         "STEPS": STEPS,
         "GUIDANCE_SCALES": GUIDANCE_SCALES,
         "CONTROL_SCALES": CONTROL_SCALES,
+<<<<<<< HEAD
+=======
+        "LORA_PATH": LORA_PATH or "",
+>>>>>>> 604a583 (Convert diffusers to regular folder; add LoRA/scripts; ignore outputs)
     })
 
     # 2) 逐个ID评测
