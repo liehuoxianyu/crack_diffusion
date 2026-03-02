@@ -76,24 +76,16 @@ class CrackTreeControlNet(datasets.GeneratorBasedBuilder):
                 cond = Image.open(cond_path).convert("L")
 
                 if not USE_PATCH:
-<<<<<<< HEAD
-                    yield i, {"image": img, "conditioning_image": cond.convert("RGB"), "text": text}
-=======
                     yield train_idx, {"image": img, "conditioning_image": cond.convert("RGB"), "text": text}
                     train_idx += 1
->>>>>>> 604a583 (Convert diffusers to regular folder; add LoRA/scripts; ignore outputs)
                     continue
 
                 W, H = img.size
                 if W < PATCH or H < PATCH:
                     img = img.resize((PATCH, PATCH), Image.BICUBIC)
                     cond = cond.resize((PATCH, PATCH), Image.BICUBIC)
-<<<<<<< HEAD
-                    yield i, {"image": img, "conditioning_image": cond.convert("RGB"), "text": text}
-=======
                     yield train_idx, {"image": img, "conditioning_image": cond.convert("RGB"), "text": text}
                     train_idx += 1
->>>>>>> 604a583 (Convert diffusers to regular folder; add LoRA/scripts; ignore outputs)
                     continue
 
                 cond_np = np.array(cond, dtype=np.uint8)
@@ -120,11 +112,7 @@ class CrackTreeControlNet(datasets.GeneratorBasedBuilder):
                 img_c = img.crop((x0, y0, x0 + PATCH, y0 + PATCH))
                 cond_c = cond.crop((x0, y0, x0 + PATCH, y0 + PATCH)).convert("RGB")
 
-<<<<<<< HEAD
-                yield i, {"image": img_c, "conditioning_image": cond_c, "text": text}
-=======
                 yield train_idx, {"image": img_c, "conditioning_image": cond_c, "text": text}
                 train_idx += 1
->>>>>>> 604a583 (Convert diffusers to regular folder; add LoRA/scripts; ignore outputs)
 
 BUILDER_CLASS = CrackTreeControlNet
