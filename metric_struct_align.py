@@ -46,7 +46,7 @@ def load_gray(p):
     return im
 
 def make_allow_region(cond_gray, cond_type, dilate, dt_th):
-    """cond_type: 'binary' 用 >127；'dt' 用 >dt_th。"""
+    """cond_type: 'binary' 用 >127:'dt' 用 >dt_th。"""
     if cond_type == "binary":
         crack = (cond_gray > 127).astype(np.uint8)
         if dilate > 0:
@@ -177,7 +177,7 @@ def get_cond_root(mode):
     return None
 
 def cond_type_for_allow(mode):
-    """用于 make_allow_region 的条件类型：binary 或 dt。"""
+    """用于 make_allow_region 的条件类型:binary 或 dt。"""
     return "binary" if mode in ("binary", "binary_lora") else "dt"
 
 def summarize_group(values):
