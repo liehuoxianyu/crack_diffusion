@@ -55,6 +55,8 @@ COND_DT_DIR     = "/CrackTree260/cond_dt"
 
 # 评测ID文件
 EVAL_IDS_TXT = "/CrackTree260/eval_ids.txt"
+# 只跑前 N 个 ID（试跑看效果）：设为 1 跑一张，None 跑全部
+LIMIT_IDS = None
 
 # 要评测哪些checkpoint
 CKPTS = [500, 1000, 1500, 2000]
@@ -65,7 +67,7 @@ NEG_PROMPT = ""   # 需要可自行加
 SEED = 42
 STEPS = 25
 GUIDANCE_SCALES = [7.5]   # 单值减少工作量；多尺度可改为 [6.0, 7.5]
-CONTROL_SCALES = [1.0, 1.5, 2.0]
+CONTROL_SCALES = [0.75, 1.0, 1.25]
 
 # 输出目录
 OUTDIR = "/work/outputs/exp_eval_all"
@@ -76,6 +78,8 @@ USE_FP16 = True
 # LoRA（可选）：仅作用于 UNet，加载顺序 base → controlnet(如有) → lora(如有)
 # 设为 None 或空字符串则不加载；可为目录或 .safetensors 文件路径
 LORA_PATH = "/work/outputs/exp_lora_realism"  # 设为 None 则不加载；可为目录或 .safetensors 文件
+# LoRA 介入强度：1.0=全开，<1 减弱（如 0.5~0.7 可降低“介入太多”）
+LORA_SCALE = 0.7
 # ============================================================
 
 
@@ -112,7 +116,7 @@ def load_sd_pipe(device, dtype, use_lora=False):
 
 
 def load_cn_pipe(controlnet_dir, device, dtype, use_lora=False):
-    """use_lora=False: SD+ControlNet；use_lora=True: SD+LoRA+ControlNet（需 LORA_PATH 有效）"""
+    """use_lora=False: SD+ControlNet；use_lora=True: SD+LoRA+ControlNet(需 LORA_PATH 有效）"""
     controlnet = ControlNetModel.from_pretrained(controlnet_dir, torch_dtype=dtype)
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         BASE_MODEL,
@@ -130,21 +134,28 @@ def load_cn_pipe(controlnet_dir, device, dtype, use_lora=False):
 
 
 @torch.inference_mode()
-def infer_sd(pipe, prompt, neg_prompt, steps, guidance, seed, device):
+def infer_sd(pipe, prompt, neg_prompt, steps, guidance, seed, device, lora_scale=None):
     g = torch.Generator(device=device).manual_seed(seed)
+    kw = {}
+    if lora_scale is not None:
+        kw["cross_attention_kwargs"] = {"scale": float(lora_scale)}
     im = pipe(
         prompt=prompt,
         negative_prompt=neg_prompt if neg_prompt else None,
         num_inference_steps=steps,
         guidance_scale=float(guidance),
         generator=g,
+        **kw,
     ).images[0]
     return im
 
 
 @torch.inference_mode()
-def infer_cn(pipe, prompt, neg_prompt, cond_img, steps, guidance, control_scale, seed, device):
+def infer_cn(pipe, prompt, neg_prompt, cond_img, steps, guidance, control_scale, seed, device, lora_scale=None):
     g = torch.Generator(device=device).manual_seed(seed)
+    kw = {}
+    if lora_scale is not None:
+        kw["cross_attention_kwargs"] = {"scale": float(lora_scale)}
     im = pipe(
         prompt=prompt,
         negative_prompt=neg_prompt if neg_prompt else None,
@@ -153,6 +164,7 @@ def infer_cn(pipe, prompt, neg_prompt, cond_img, steps, guidance, control_scale,
         guidance_scale=float(guidance),
         controlnet_conditioning_scale=float(control_scale),
         generator=g,
+        **kw,
     ).images[0]
     return im
 
@@ -169,7 +181,11 @@ def ensure_controlnet_dir(run_dir, step):
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
     ids = read_ids(EVAL_IDS_TXT)
-    print("eval ids:", ids)
+    if LIMIT_IDS is not None:
+        ids = ids[:LIMIT_IDS]
+        print("limit to first", LIMIT_IDS, "ids:", ids)
+    else:
+        print("eval ids:", ids)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if (USE_FP16 and device == "cuda") else torch.float32
@@ -193,6 +209,8 @@ def main():
         "GUIDANCE_SCALES": GUIDANCE_SCALES,
         "CONTROL_SCALES": CONTROL_SCALES,
         "LORA_PATH": LORA_PATH or "",
+        "LORA_SCALE": LORA_SCALE,
+        "LIMIT_IDS": LIMIT_IDS,
     })
 
     # 2) 逐个ID评测
@@ -222,7 +240,7 @@ def main():
             sd_lora_dir = os.path.join(id_out, "sd_lora")
             os.makedirs(sd_lora_dir, exist_ok=True)
             for r, gs in enumerate(GUIDANCE_SCALES):
-                im = infer_sd(sd_lora_pipe, PROMPT, NEG_PROMPT, STEPS, gs, SEED + 100 + r, device)
+                im = infer_sd(sd_lora_pipe, PROMPT, NEG_PROMPT, STEPS, gs, SEED + 100 + r, device, lora_scale=LORA_SCALE)
                 im.save(os.path.join(sd_lora_dir, f"gs{gs}.png"))
             del sd_lora_pipe
             torch.cuda.empty_cache()
@@ -278,7 +296,7 @@ def main():
                     idx = 0
                     for gs in GUIDANCE_SCALES:
                         for cs in CONTROL_SCALES:
-                            im = infer_cn(pipe, PROMPT, NEG_PROMPT, cond_img, STEPS, gs, cs, SEED + 200 + idx, device)
+                            im = infer_cn(pipe, PROMPT, NEG_PROMPT, cond_img, STEPS, gs, cs, SEED + 200 + idx, device, lora_scale=LORA_SCALE)
                             im.save(os.path.join(out_dir, f"gs{gs}_cs{cs}.png"))
                             idx += 1
 

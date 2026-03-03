@@ -1,19 +1,22 @@
-# ========== 数据加载配置（Binary） ==========
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ========== 数据加载配置（DT） ==========
 export CRACK_JSONL="/CrackTree260/train_linux.jsonl"
-export CRACK_COND_DIR="/CrackTree260/cond_mask"
+export CRACK_COND_DIR="/CrackTree260/cond_dt"
 
 # patch 策略
 export CRACK_USE_PATCH="1"
 export CRACK_PATCH="512"
 export CRACK_TRY="30"
-export CRACK_TH="127"          # binary阈值
-export CRACK_P_RANDOM="0.0"    # 0表示纯裂缝优先；想混合可设0.3等
+export CRACK_TH="32"           # DT阈值（与你之前一致）
+export CRACK_P_RANDOM="0.0"    # 0表示纯裂缝优先；想学全局光影可设0.3
 export CRACK_CROP_SEED="12345"
 
 # ========== 训练配置 ==========
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 export CONTROLNET_INIT="lllyasviel/sd-controlnet-seg"
-export OUTPUT_DIR="/work/outputs/exp_binary_patch512"
+export OUTPUT_DIR="/work/outputs/exp_dt_patch512"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -38,7 +41,7 @@ accelerate launch train_controlnet.py \
   --checkpointing_steps=500 \
   --validation_steps=500 \
   --validation_prompt "a photo of pavement crack, realistic texture, high detail, natural shadowing, realistic lighting" \
-  --validation_image "/CrackTree260/cond_mask/6192.png" \
+  --validation_image "/CrackTree260/cond_dt/6192.png" \
   --num_validation_images=4 \
   --mixed_precision="fp16" \
   --enable_xformers_memory_efficient_attention \

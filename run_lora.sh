@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 # ========== LoRA 训练：仅 UNet，提升真实感（光照/纹理），基座 SD v1.5 ==========
 # 使用 diffusers 官方 train_text_to_image_lora.py，数据为 CrackTree image+text（排除 eval_ids）
 export CRACK_JSONL="/CrackTree260/train_linux.jsonl"
