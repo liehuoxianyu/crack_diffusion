@@ -1,2 +1,8 @@
 # Training / inference outputs (do not commit)
 outputs/
+
+# Local workspace / cache files
+.cursor/
+__pycache__/
+*.pyc
+core.*

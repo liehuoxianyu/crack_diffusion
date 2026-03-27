@@ -13,7 +13,7 @@ from datetime import datetime
 RUNS = {
     "binary": "/work/outputs/exp_binary_patch512",
     "dt":     "/work/outputs/exp_dt_patch512",
-    # "lora": "/work/outputs/exp_lora_realism",  # 可选：LoRA 仅写权重路径，无 checkpoint-*
+    "lora":   "/work/outputs/exp_lora_realism",
 }
 EVAL_IDS_TXT = "/CrackTree260/eval_ids.txt"
 
@@ -129,18 +129,35 @@ def write_card(tag, run_dir, out_path):
     eval_ids = read_eval_ids(EVAL_IDS_TXT)
     ids_summary = format_eval_ids_summary(eval_ids) if eval_ids else "(none)"
 
-    cond_dir = COND_DIRS.get(tag, "/")
+    cond_dir = COND_DIRS.get(tag)
+    is_lora = tag == "lora"
+    goal_lines = (
+        [
+            "- LoRA fine-tuning (UNet only) for improved realism (lighting/texture).\n",
+            "- No structural control; use with SD or SD+ControlNet at inference.\n",
+        ]
+        if is_lora
+        else [
+            "- ControlNet fine-tuning for pavement crack generation with strong structural control.\n",
+            "- Compare binary mask vs DT heatmap conditioning.\n",
+        ]
+    )
+    cond_line = (
+        f"- cond dir: N/A (LoRA uses image+text only)\n"
+        if is_lora
+        else f"- cond dir ({tag}): `{cond_dir}` (exists={file_exists(cond_dir)})\n"
+    )
     md = [
         f"# Experiment Card - {tag}\n",
         f"- Generated at: `{now}`\n",
         f"- Run dir: `{run_dir}`\n\n",
         "## 1. Goal\n",
-        "- ControlNet fine-tuning for pavement crack generation with strong structural control.\n",
-        "- Compare binary mask vs DT heatmap conditioning.\n\n",
+        *goal_lines,
+        "\n",
         "## 2. Data\n",
         f"- jsonl: `{DATA_JSONL}` (exists={file_exists(DATA_JSONL)})\n",
         f"- image dir: `{DATA_IMAGE_DIR}` (exists={file_exists(DATA_IMAGE_DIR)})\n",
-        f"- cond dir ({tag}): `{cond_dir}` (exists={file_exists(cond_dir)})\n",
+        cond_line,
         f"- eval ids: `{EVAL_IDS_TXT}` (n={len(eval_ids)})\n",
         f"  - ids: {ids_summary}\n\n",
         "## 3. Models\n",
@@ -173,7 +190,7 @@ def write_card(tag, run_dir, out_path):
         f"- diffusers: `{versions.get('diffusers', '?')}`\n",
         f"- datasets: `{versions.get('datasets', '?')}`\n",
         f"- accelerate: `{versions.get('accelerate', '?')}`\n\n",
-    ]
+    ])
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(md)
     print("wrote", out_path)
