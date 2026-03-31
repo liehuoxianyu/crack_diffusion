@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import styles from "./page.module.css";
 
 type ControlNetType = "DT" | "Binary";
 
@@ -14,17 +15,32 @@ type HistoryItem = {
   mode: string | null;
 };
 
-function snapTo8(v: number) {
-  const n = Math.max(8, Math.floor(v));
-  return n - (n % 8);
+type PersistedUiState = {
+  prompt: string;
+  negativePrompt: string;
+  seed: number;
+  numInferenceSteps: number;
+  guidanceScale: number;
+  width: number;
+  height: number;
+  enableControlnet: boolean;
+  controlnetType: ControlNetType;
+  controlnetConditioningScale: number;
+  enableLora: boolean;
+  loraPath: string;
+  loraScale: number;
+  advancedOpen: boolean;
+};
+
+const UI_STATE_STORAGE_KEY = "cracktree-webdemo-ui-state-v1";
+
+function clamp(v: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, v));
 }
 
-function buildModeTag(enableControlnet: boolean, enableLora: boolean, cnType: string) {
-  const cn = (cnType || "").trim().toLowerCase();
-  if (enableControlnet && enableLora) return `controlnet+lora`;
-  if (enableControlnet) return `controlnet+${cn || "dt"}`;
-  if (enableLora) return `lora`;
-  return `sd`;
+function snapTo8(v: number) {
+  const n = Math.max(64, Math.floor(v));
+  return n - (n % 8);
 }
 
 export default function Page() {
@@ -62,9 +78,8 @@ export default function Page() {
     "/work/outputs/exp_lora_realism/pytorch_lora_weights.safetensors"
   );
   const [loraScale, setLoraScale] = useState<number>(0.7);
-
-  // ---- UI states ----
-  const [showAdvanced, setShowAdvanced] = useState<boolean>(true);
+  const [advancedOpen, setAdvancedOpen] = useState<boolean>(true);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   // ---- Right panel: outputs ----
   const [loading, setLoading] = useState(false);
@@ -73,9 +88,6 @@ export default function Page() {
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [configSummary, setConfigSummary] = useState<string | null>(null);
-  const [modeTag, setModeTag] = useState<string>(() =>
-    buildModeTag(false, false, "DT")
-  );
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
@@ -84,11 +96,6 @@ export default function Page() {
     if (!imageBase64) return null;
     return `data:image/png;base64,${imageBase64}`;
   }, [imageBase64]);
-
-  useEffect(() => {
-    const tag = buildModeTag(enableControlnet, enableLora, controlnetType);
-    setModeTag(tag);
-  }, [enableControlnet, enableLora, controlnetType]);
 
   useEffect(() => {
     if (!conditionImageFile) {
@@ -101,6 +108,83 @@ export default function Page() {
       URL.revokeObjectURL(url);
     };
   }, [conditionImageFile]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(UI_STATE_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as Partial<PersistedUiState>;
+      if (typeof saved.prompt === "string") setPrompt(saved.prompt);
+      if (typeof saved.negativePrompt === "string") setNegativePrompt(saved.negativePrompt);
+      if (typeof saved.seed === "number") setSeed(saved.seed);
+      if (typeof saved.numInferenceSteps === "number") setNumInferenceSteps(saved.numInferenceSteps);
+      if (typeof saved.guidanceScale === "number") setGuidanceScale(saved.guidanceScale);
+      if (typeof saved.width === "number") setWidth(saved.width);
+      if (typeof saved.height === "number") setHeight(saved.height);
+      if (typeof saved.enableControlnet === "boolean") setEnableControlnet(saved.enableControlnet);
+      if (saved.controlnetType === "DT" || saved.controlnetType === "Binary") {
+        setControlnetType(saved.controlnetType);
+      }
+      if (typeof saved.controlnetConditioningScale === "number") {
+        setControlnetConditioningScale(saved.controlnetConditioningScale);
+      }
+      if (typeof saved.enableLora === "boolean") setEnableLora(saved.enableLora);
+      if (typeof saved.loraPath === "string") setLoraPath(saved.loraPath);
+      if (typeof saved.loraScale === "number") setLoraScale(saved.loraScale);
+      if (typeof saved.advancedOpen === "boolean") setAdvancedOpen(saved.advancedOpen);
+    } catch {
+      // Ignore malformed persisted state.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const payload: PersistedUiState = {
+      prompt,
+      negativePrompt,
+      seed,
+      numInferenceSteps,
+      guidanceScale,
+      width,
+      height,
+      enableControlnet,
+      controlnetType,
+      controlnetConditioningScale,
+      enableLora,
+      loraPath,
+      loraScale,
+      advancedOpen,
+    };
+    window.localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(payload));
+  }, [
+    prompt,
+    negativePrompt,
+    seed,
+    numInferenceSteps,
+    guidanceScale,
+    width,
+    height,
+    enableControlnet,
+    controlnetType,
+    controlnetConditioningScale,
+    enableLora,
+    loraPath,
+    loraScale,
+    advancedOpen,
+  ]);
+
+  useEffect(() => {
+    if (!statusMessage) return;
+    const timer = window.setTimeout(() => setStatusMessage(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [statusMessage]);
 
   const reset = () => {
     setPrompt(
@@ -127,10 +211,12 @@ export default function Page() {
     setImagePath(null);
     setElapsedMs(null);
     setConfigSummary(null);
+    setStatusMessage("Parameters reset.");
   };
 
   const showError = (msg: string) => {
     setError(msg);
+    setStatusMessage(null);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setError(null), 4200);
   };
@@ -142,27 +228,44 @@ export default function Page() {
   const onGenerate = async () => {
     setLoading(true);
     setError(null);
+    setStatusMessage(null);
     try {
       if (enableControlnet && !conditionImageFile) {
         throw new Error("enable_controlnet=true 时需要上传 condition_image。");
       }
 
+      const normalizedSeed = Number.isFinite(seed) ? Math.floor(seed) : 42;
+      const normalizedSteps = clamp(Math.floor(numInferenceSteps || 25), 1, 100);
+      const normalizedGuidance = clamp(Number(guidanceScale || 7.5), 1, 20);
+      const normalizedWidth = clamp(snapTo8(width || 512), 64, 2048);
+      const normalizedHeight = clamp(snapTo8(height || 512), 64, 2048);
+      const normalizedCnScale = clamp(Number(controlnetConditioningScale || 1.0), 0, 2);
+      const normalizedLoraScale = clamp(Number(loraScale || 0.7), 0, 2);
+
+      setSeed(normalizedSeed);
+      setNumInferenceSteps(normalizedSteps);
+      setGuidanceScale(normalizedGuidance);
+      setWidth(normalizedWidth);
+      setHeight(normalizedHeight);
+      setControlnetConditioningScale(normalizedCnScale);
+      setLoraScale(normalizedLoraScale);
+
       const form = new FormData();
       form.append("prompt", prompt);
-      form.append("negative_prompt", negativePrompt);
-      form.append("seed", String(seed));
-      form.append("num_inference_steps", String(numInferenceSteps));
-      form.append("guidance_scale", String(guidanceScale));
-      form.append("width", String(width));
-      form.append("height", String(height));
+      form.append("negative_prompt", "");
+      form.append("seed", String(normalizedSeed));
+      form.append("num_inference_steps", String(normalizedSteps));
+      form.append("guidance_scale", String(normalizedGuidance));
+      form.append("width", String(normalizedWidth));
+      form.append("height", String(normalizedHeight));
 
       form.append("enable_controlnet", enableControlnet ? "true" : "false");
       form.append("controlnet_type", controlnetType === "DT" ? "DT" : "Binary");
-      form.append("controlnet_conditioning_scale", String(controlnetConditioningScale));
+      form.append("controlnet_conditioning_scale", String(normalizedCnScale));
 
       form.append("enable_lora", enableLora ? "true" : "false");
       form.append("lora_path", enableLora ? loraPath : "");
-      form.append("lora_scale", String(loraScale));
+      form.append("lora_scale", String(normalizedLoraScale));
 
       if (enableControlnet) {
         form.append("condition_image", conditionImageFile as File);
@@ -182,6 +285,7 @@ export default function Page() {
       setImagePath(data.image_path);
       setElapsedMs(data.elapsed_ms);
       setConfigSummary(data.config_summary);
+      setStatusMessage(`Generation complete${data.elapsed_ms ? ` in ${data.elapsed_ms} ms` : "."}`);
 
       const item: HistoryItem = {
         id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
@@ -217,64 +321,195 @@ export default function Page() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="p-4 md:p-6 max-w-[1400px] mx-auto">
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <h1 className="text-lg md:text-xl font-semibold">CrackTree Web Demo</h1>
-          <div className="text-sm text-zinc-400">
-            API: <span className="text-zinc-200">{API_URL}</span>
+    <div className={styles.page}>
+      <div className={styles.shell}>
+        <header className={styles.header}>
+          <div className={styles.brand}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/aistudio.svg" alt="AIStudio logo" className={styles.brandLogo} />
+            <h1 className={styles.title}>CrackTree Web Demo</h1>
           </div>
-        </div>
+        </header>
 
-        <div className="flex gap-4 md:gap-6">
-          {/* Left panel */}
-          <div className="w-full md:w-[420px] shrink-0">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-              <div className="space-y-4">
+        <div className={styles.content}>
+          <aside className={styles.leftRail}>
+            <div className={styles.leftRailInner}>
+              <div className={styles.panelTitle}>Modules</div>
+              <div className={styles.moduleStack}>
+                <div className={`${styles.moduleCard} ${styles.moduleCardActive}`}>
+                  <div className={styles.moduleName}>Stable Diffusion</div>
+                  <div className={styles.moduleDesc}>Base model, always active</div>
+                  <span className={styles.moduleBadge}>ON</span>
+                </div>
+
+                <button
+                  type="button"
+                  className={`${styles.moduleCard} ${enableControlnet ? styles.moduleCardActive : ""}`}
+                  onClick={() => setEnableControlnet((v) => !v)}
+                >
+                  <div className={styles.moduleName}>ControlNet</div>
+                  <div className={styles.moduleDesc}>Optional condition branch</div>
+                  <span className={styles.moduleBadge}>{enableControlnet ? "ON" : "OFF"}</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`${styles.moduleCard} ${enableLora ? styles.moduleCardActive : ""}`}
+                  onClick={() => setEnableLora((v) => !v)}
+                >
+                  <div className={styles.moduleName}>LoRA</div>
+                  <div className={styles.moduleDesc}>Optional finetune adapter</div>
+                  <span className={styles.moduleBadge}>{enableLora ? "ON" : "OFF"}</span>
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          <main className={styles.centerMain}>
+            <div className={styles.card}>
+              <div className={styles.cardBody}>
+                <div className={styles.resultHead}>
+                  <div>
+                    <div className={styles.panelTitle}>Result Preview</div>
+                    <div className={styles.muted}>
+                      {loading
+                        ? "Generating..."
+                        : elapsedMs !== null
+                          ? `elapsed: ${elapsedMs} ms`
+                          : " "}
+                    </div>
+                  </div>
+                  <div className={styles.resultActions}>
+                    <button
+                      className={styles.secondaryButton}
+                      onClick={onDownload}
+                      disabled={!imageDownloadUrl || loading}
+                      type="button"
+                      title={imageDownloadUrl ? "Download generated PNG" : "No image yet"}
+                    >
+                      Download PNG
+                    </button>
+                  </div>
+                </div>
+
+                <div className={styles.previewBox}>
+                  {imageBase64 ? (
+                    <div className={styles.previewFrame}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`data:image/png;base64,${imageBase64}`}
+                        alt="generated"
+                        className={styles.previewImage}
+                      />
+
+                      {loading ? (
+                        <div className={styles.overlay}>
+                          <div className={styles.spinner} />
+                          <div>Generating...</div>
+                          <div className={styles.muted}>Please keep this tab open.</div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className={styles.empty}>
+                      {loading ? (
+                        <>
+                          <div className={styles.spinner} />
+                          <div>Generating...</div>
+                          <div className={styles.muted}>Please keep this tab open.</div>
+                        </>
+                      ) : (
+                        <div className={styles.muted}>
+                          点击 <strong>Generate</strong> 开始推理
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className={styles.summarySection}>
+                  <div className={styles.panelTitle}>推理配置摘要</div>
+                  <pre className={styles.summaryPre}>{configSummary ?? " "}</pre>
+                  {imagePath ? <div className={styles.muted}>saved: {imagePath}</div> : null}
+                </div>
+
+                <div className={styles.summarySection}>
+                  <div className={styles.panelTitle}>History</div>
+                  <div className={styles.muted}>recent generated results</div>
+
+                  {history.length === 0 ? (
+                    <div className={styles.muted}>暂无历史记录</div>
+                  ) : (
+                    <div className={styles.historyGrid}>
+                      {history.map((h) => (
+                        <button
+                          key={h.id}
+                          type="button"
+                          onClick={() => onPickHistory(h)}
+                          className={styles.historyButton}
+                          disabled={!h.imageBase64}
+                        >
+                          {h.imageBase64 ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={`data:image/png;base64,${h.imageBase64}`}
+                              alt="history thumbnail"
+                              className={styles.thumb}
+                            />
+                          ) : (
+                            <div className={styles.thumbPlaceholder}>no image</div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </main>
+
+          <aside className={styles.rightPanel}>
+            <div className={styles.card}>
+              <div className={`${styles.cardBody} ${styles.stack}`}>
+                <div className={styles.panelTitle}>Parameter</div>
+
                 <div>
-                  <div className="text-sm text-zinc-300 mb-1">prompt</div>
+                  <label className={styles.label}>prompt</label>
                   <textarea
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
+                    className={styles.textArea}
                     rows={4}
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                   />
                 </div>
 
-                <div>
-                  <div className="text-sm text-zinc-300 mb-1">negative prompt</div>
-                  <textarea
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
-                    rows={3}
-                    value={negativePrompt}
-                    onChange={(e) => setNegativePrompt(e.target.value)}
-                  />
-                </div>
+                {/* negative prompt removed from UI by request */}
 
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="text-sm text-zinc-300">
-                    seed
+                <div className={styles.grid2}>
+                  <label>
+                    <span className={styles.label}>seed</span>
                     <input
-                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
+                      className={styles.input}
                       type="number"
                       value={seed}
                       onChange={(e) => setSeed(Number(e.target.value))}
                     />
                   </label>
-                  <label className="text-sm text-zinc-300">
-                    steps
+
+                  <label>
+                    <span className={styles.label}>steps</span>
                     <input
-                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
+                      className={styles.input}
                       type="number"
                       value={numInferenceSteps}
                       onChange={(e) => setNumInferenceSteps(Number(e.target.value))}
                     />
                   </label>
 
-                  <label className="text-sm text-zinc-300">
-                    guidance_scale
+                  <label>
+                    <span className={styles.label}>guidance_scale</span>
                     <input
-                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
+                      className={styles.input}
                       type="number"
                       step={0.1}
                       value={guidanceScale}
@@ -282,144 +517,44 @@ export default function Page() {
                     />
                   </label>
 
-                  <div className="flex items-end gap-2">
-                    <div className="w-full">
-                      <label className="text-sm text-zinc-300 block">
-                        width / height
-                      </label>
-                      <div className="grid grid-cols-2 gap-2 mt-1">
-                        <input
-                          className="rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
-                          type="number"
-                          step={8}
-                          value={width}
-                          onChange={(e) => {
-                            const v = Math.max(8, Number(e.target.value));
-                            setWidth(v - (v % 8));
-                          }}
-                        />
-                        <input
-                          className="rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
-                          type="number"
-                          step={8}
-                          value={height}
-                          onChange={(e) => {
-                            const v = Math.max(8, Number(e.target.value));
-                            setHeight(v - (v % 8));
-                          }}
-                        />
-                      </div>
+                  <div>
+                    <span className={styles.label}>width / height</span>
+                    <div className={styles.inline2}>
+                      <input
+                        className={styles.input}
+                        type="number"
+                        step={8}
+                        value={width}
+                        onChange={(e) => {
+                          const v = Math.max(8, Number(e.target.value));
+                          setWidth(v - (v % 8));
+                        }}
+                      />
+                      <input
+                        className={styles.input}
+                        type="number"
+                        step={8}
+                        value={height}
+                        onChange={(e) => {
+                          const v = Math.max(8, Number(e.target.value));
+                          setHeight(v - (v % 8));
+                        }}
+                      />
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-zinc-800">
-                  <div className="text-sm font-semibold text-zinc-200 mb-2">
-                    ControlNet Settings
-                  </div>
-                  <label className="flex items-center gap-2 text-sm text-zinc-200">
-                    <input
-                      type="checkbox"
-                      checked={enableControlnet}
-                      onChange={(e) => setEnableControlnet(e.target.checked)}
-                    />
-                    Enable ControlNet
-                  </label>
-
-                  {enableControlnet ? (
-                    <div className="mt-3 space-y-3">
-                      <div>
-                        <div className="text-sm text-zinc-300 mb-1">
-                          条件图上传（condition_image）
-                        </div>
-                        <input
-                          className="w-full text-sm"
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0] ?? null;
-                            handleConditionFile(f);
-                          }}
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <label className="text-sm text-zinc-300">
-                          条件类型
-                          <select
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
-                            value={controlnetType}
-                            onChange={(e) => setControlnetType(e.target.value as ControlNetType)}
-                          >
-                            <option value="DT">DT</option>
-                            <option value="Binary">Binary</option>
-                          </select>
-                        </label>
-
-                        <label className="text-sm text-zinc-300">
-                          ControlNet conditioning scale
-                          <input
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
-                            type="number"
-                            step={0.05}
-                            value={controlnetConditioningScale}
-                            onChange={(e) =>
-                              setControlnetConditioningScale(Number(e.target.value))
-                            }
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="pt-2 border-t border-zinc-800">
-                  <div className="text-sm font-semibold text-zinc-200 mb-2">
-                    LoRA Settings
-                  </div>
-                  <label className="flex items-center gap-2 text-sm text-zinc-200">
-                    <input
-                      type="checkbox"
-                      checked={enableLora}
-                      onChange={(e) => setEnableLora(e.target.checked)}
-                    />
-                    Enable LoRA
-                  </label>
-
-                  {enableLora ? (
-                    <div className="mt-3 space-y-3">
-                      <label className="text-sm text-zinc-300 block">
-                        LoRA path
-                        <input
-                          className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
-                          value={loraPath}
-                          onChange={(e) => setLoraPath(e.target.value)}
-                        />
-                      </label>
-                      <label className="text-sm text-zinc-300 block">
-                        LoRA scale
-                        <input
-                          className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm outline-none focus:border-zinc-500"
-                          type="number"
-                          step={0.05}
-                          value={loraScale}
-                          onChange={(e) => setLoraScale(Number(e.target.value))}
-                        />
-                      </label>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="flex gap-3 pt-2">
+                {statusMessage ? <div className={styles.statusBox}>{statusMessage}</div> : null}
+                <div className={styles.actions}>
                   <button
-                    className="flex-1 rounded-lg bg-zinc-100 text-zinc-950 px-3 py-2 text-sm font-semibold hover:bg-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                    className={styles.primaryButton}
                     onClick={onGenerate}
                     disabled={loading}
                   >
                     {loading ? "Generating..." : "Generate"}
                   </button>
                   <button
-                    className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm hover:bg-zinc-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                    className={styles.secondaryButton}
                     onClick={reset}
                     disabled={loading}
                   >
@@ -427,144 +562,140 @@ export default function Page() {
                   </button>
                 </div>
 
-                {error ? (
-                  <div className="text-sm text-red-300 bg-red-950/40 border border-red-900 rounded-lg p-3">
-                    {error}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          {/* Right panel */}
-          <div className="flex-1 min-w-0">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm text-zinc-300">Result Preview</div>
-                  <div className="text-xs text-zinc-500 mt-1">
-                    {loading
-                      ? "Generating..."
-                      : elapsedMs !== null
-                        ? `elapsed: ${elapsedMs} ms`
-                        : " "}
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center rounded-full border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-[11px] text-zinc-200">
-                      {modeTag}
-                    </span>
-
+                <div className={styles.sectionDivider}>
                   <button
-                    className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-100 hover:bg-zinc-900 disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={onDownload}
-                    disabled={!imageDownloadUrl || loading}
                     type="button"
-                    title={imageDownloadUrl ? "Download generated PNG" : "No image yet"}
+                    className={styles.advancedToggle}
+                    onClick={() => setAdvancedOpen((v) => !v)}
                   >
-                    Download PNG
+                    <span className={styles.panelTitle}>Advanced Settings</span>
+                    <span className={styles.advancedChevron}>{advancedOpen ? "▾" : "▸"}</span>
                   </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-                {imageBase64 ? (
-                  <div
-                    className="w-full h-[360px] flex items-center justify-center"
-                    style={{ position: "relative" }}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`data:image/png;base64,${imageBase64}`}
-                      alt="generated"
-                      className="w-full h-full object-contain rounded-md"
-                    />
-
-                    {loading ? (
-                      <div
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          flexDirection: "column",
-                          gap: 12,
-                          background: "rgba(9, 9, 11, 0.55)",
-                          borderRadius: "0.375rem",
-                        }}
-                      >
-                        <div className="w-10 h-10 rounded-full border-2 border-zinc-700 border-t-zinc-100 animate-spin" />
-                        <div className="text-zinc-200">Generating...</div>
-                        <div className="text-xs text-zinc-500">
-                          Please keep this tab open.
+                  {advancedOpen ? (
+                    <div className={styles.advancedPanel}>
+                      <section className={styles.advancedSection}>
+                        <div className={styles.advancedSectionHead}>
+                          <div className={styles.sectionTitle}>ControlNet</div>
+                          <label className={styles.switchControl}>
+                            <input
+                              className={styles.switchInput}
+                              type="checkbox"
+                              checked={enableControlnet}
+                              onChange={(e) => setEnableControlnet(e.target.checked)}
+                            />
+                            <span className={styles.switchTrack} />
+                            <span className={styles.switchText}>Enable</span>
+                          </label>
                         </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="h-[360px] flex flex-col items-center justify-center gap-3 text-sm">
-                    {loading ? (
-                      <>
-                        <div className="w-10 h-10 rounded-full border-2 border-zinc-700 border-t-zinc-100 animate-spin" />
-                        <div className="text-zinc-200">Generating...</div>
-                        <div className="text-xs text-zinc-500">
-                          Please keep this tab open.
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-zinc-600">
-                        点击 <span className="text-zinc-200">Generate</span> 开始推理
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
 
-              <div className="mt-4">
-                <div className="text-sm text-zinc-300 mb-2">推理配置摘要</div>
-                <pre className="text-xs text-zinc-200 bg-zinc-950 border border-zinc-800 rounded-lg p-3 whitespace-pre-wrap">
-                  {configSummary ?? " "}
-                </pre>
-              </div>
+                        {enableControlnet ? (
+                          <div className={styles.advancedSectionBody}>
+                            <div>
+                              <label className={styles.label}>condition_image upload</label>
+                              <input
+                                className={styles.fileInput}
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0] ?? null;
+                                  handleConditionFile(f);
+                                }}
+                              />
+                            </div>
 
-              <div className="mt-4">
-                <div className="text-sm text-zinc-300 mb-2">History</div>
-                <div className="text-xs text-zinc-500 mb-3">recent generated results</div>
+                            {conditionPreviewUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                className={styles.thumb}
+                                src={conditionPreviewUrl}
+                                alt="condition preview"
+                              />
+                            ) : null}
 
-                {history.length === 0 ? (
-                  <div className="text-sm text-zinc-600 py-4">暂无历史记录</div>
-                ) : (
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                    {history.map((h) => (
-                      <button
-                        key={h.id}
-                        type="button"
-                        onClick={() => onPickHistory(h)}
-                        className="group rounded-lg border border-zinc-800 bg-zinc-950/40 p-1 hover:border-zinc-500 transition disabled:opacity-60"
-                        disabled={!h.imageBase64}
-                      >
-                        {h.imageBase64 ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={`data:image/png;base64,${h.imageBase64}`}
-                            alt="history thumbnail"
-                            className="w-full h-auto rounded-md object-contain"
-                          />
+                            <div className={styles.grid2}>
+                              <label>
+                                <span className={styles.label}>condition type</span>
+                                <select
+                                  className={styles.select}
+                                  value={controlnetType}
+                                  onChange={(e) =>
+                                    setControlnetType(e.target.value as ControlNetType)
+                                  }
+                                >
+                                  <option value="DT">DT</option>
+                                  <option value="Binary">Binary</option>
+                                </select>
+                              </label>
+
+                              <label>
+                                <span className={styles.label}>conditioning scale</span>
+                                <input
+                                  className={styles.input}
+                                  type="number"
+                                  step={0.05}
+                                  value={controlnetConditioningScale}
+                                  onChange={(e) =>
+                                    setControlnetConditioningScale(Number(e.target.value))
+                                  }
+                                />
+                              </label>
+                            </div>
+                          </div>
                         ) : (
-                          <div className="aspect-square flex items-center justify-center text-zinc-600 text-[11px]">
-                            no image
+                          <div className={styles.muted}>
+                            Enable to configure condition image and strength.
                           </div>
                         )}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                      </section>
+
+                      <section className={styles.advancedSection}>
+                        <div className={styles.advancedSectionHead}>
+                          <div className={styles.sectionTitle}>LoRA</div>
+                          <label className={styles.switchControl}>
+                            <input
+                              className={styles.switchInput}
+                              type="checkbox"
+                              checked={enableLora}
+                              onChange={(e) => setEnableLora(e.target.checked)}
+                            />
+                            <span className={styles.switchTrack} />
+                            <span className={styles.switchText}>Enable</span>
+                          </label>
+                        </div>
+
+                        {enableLora ? (
+                          <div className={styles.advancedSectionBody}>
+                            <label>
+                              <span className={styles.label}>LoRA path</span>
+                              <input
+                                className={styles.input}
+                                value={loraPath}
+                                onChange={(e) => setLoraPath(e.target.value)}
+                              />
+                            </label>
+                            <label>
+                              <span className={styles.label}>LoRA scale</span>
+                              <input
+                                className={styles.input}
+                                type="number"
+                                step={0.05}
+                                value={loraScale}
+                                onChange={(e) => setLoraScale(Number(e.target.value))}
+                              />
+                            </label>
+                          </div>
+                        ) : (
+                          <div className={styles.muted}>Enable to set LoRA path and scale.</div>
+                        )}
+                      </section>
+                    </div>
+                  ) : null}
+                </div>
+
+                {error ? <div className={styles.errorBox}>{error}</div> : null}
               </div>
             </div>
-          </div>
+          </aside>
         </div>
       </div>
     </div>
