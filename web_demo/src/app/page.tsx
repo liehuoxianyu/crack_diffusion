@@ -43,6 +43,24 @@ function snapTo8(v: number) {
   return n - (n % 8);
 }
 
+function detailToMessage(detail: unknown): string {
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          if (typeof record.msg === "string") return record.msg;
+        }
+        return null;
+      })
+      .filter((v): v is string => Boolean(v && v.trim()));
+    if (parts.length) return parts.join("; ");
+  }
+  return "";
+}
+
 export default function Page() {
   const API_URL = useMemo(
     () => process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
@@ -225,11 +243,41 @@ export default function Page() {
     setConditionImageFile(f);
   };
 
+  const toggleControlnet = (source: "left" | "advanced", value?: boolean) => {
+    const next = value ?? !enableControlnet;
+    setEnableControlnet(next);
+    if (source === "left") setAdvancedOpen(true);
+    setStatusMessage(`ControlNet ${next ? "enabled" : "disabled"}.`);
+  };
+
+  const toggleLora = (source: "left" | "advanced", value?: boolean) => {
+    const next = value ?? !enableLora;
+    setEnableLora(next);
+    if (source === "left") setAdvancedOpen(true);
+    setStatusMessage(`LoRA ${next ? "enabled" : "disabled"}.`);
+  };
+
+  const toggleAdvanced = () => {
+    setAdvancedOpen((prev) => {
+      const next = !prev;
+      setStatusMessage(`Advanced settings ${next ? "expanded" : "collapsed"}.`);
+      return next;
+    });
+  };
+
   const onGenerate = async () => {
+    if (loading) return;
     setLoading(true);
     setError(null);
-    setStatusMessage(null);
+    setStatusMessage("Submitting request...");
+    const controller = new AbortController();
+    const timeoutMs = 180000;
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
+      const trimmedPrompt = prompt.trim();
+      if (!trimmedPrompt) {
+        throw new Error("prompt 不能为空。");
+      }
       if (enableControlnet && !conditionImageFile) {
         throw new Error("enable_controlnet=true 时需要上传 condition_image。");
       }
@@ -251,8 +299,8 @@ export default function Page() {
       setLoraScale(normalizedLoraScale);
 
       const form = new FormData();
-      form.append("prompt", prompt);
-      form.append("negative_prompt", "");
+      form.append("prompt", trimmedPrompt);
+      form.append("negative_prompt", negativePrompt);
       form.append("seed", String(normalizedSeed));
       form.append("num_inference_steps", String(normalizedSteps));
       form.append("guidance_scale", String(normalizedGuidance));
@@ -274,11 +322,27 @@ export default function Page() {
       const resp = await fetch(`${API_URL}/generate`, {
         method: "POST",
         body: form,
+        signal: controller.signal,
       });
-
-      const data = await resp.json();
+      const raw = await resp.text();
+      let data: Record<string, any> | null = null;
+      if (raw.trim()) {
+        try {
+          data = JSON.parse(raw) as Record<string, any>;
+        } catch {
+          data = null;
+        }
+      }
       if (!resp.ok) {
-        throw new Error(data?.detail ?? "Request failed");
+        const detail =
+          detailToMessage(data?.detail) ||
+          (raw.trim() ? raw.trim().slice(0, 300) : "") ||
+          resp.statusText ||
+          "Request failed";
+        throw new Error(`请求失败 (${resp.status}): ${detail}`);
+      }
+      if (!data) {
+        throw new Error("服务端返回了空响应或非 JSON 响应。");
       }
 
       setImageBase64(data.image_base64);
@@ -297,9 +361,18 @@ export default function Page() {
         mode: data.mode ?? null,
       };
       setHistory((prev) => [item, ...prev].slice(0, 12));
-    } catch (e: any) {
-      showError(e?.message ? String(e.message) : String(e));
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        showError(`请求超时（>${Math.floor(timeoutMs / 1000)}s），请检查后端是否仍在运行。`);
+      } else if (e instanceof TypeError) {
+        showError(`无法连接到后端 ${API_URL}。请确认 API 已启动且地址可达。`);
+      } else if (e instanceof Error) {
+        showError(e.message);
+      } else {
+        showError(String(e));
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -345,7 +418,7 @@ export default function Page() {
                 <button
                   type="button"
                   className={`${styles.moduleCard} ${enableControlnet ? styles.moduleCardActive : ""}`}
-                  onClick={() => setEnableControlnet((v) => !v)}
+                  onClick={() => toggleControlnet("left")}
                 >
                   <div className={styles.moduleName}>ControlNet</div>
                   <div className={styles.moduleDesc}>Optional condition branch</div>
@@ -355,7 +428,7 @@ export default function Page() {
                 <button
                   type="button"
                   className={`${styles.moduleCard} ${enableLora ? styles.moduleCardActive : ""}`}
-                  onClick={() => setEnableLora((v) => !v)}
+                  onClick={() => toggleLora("left")}
                 >
                   <div className={styles.moduleName}>LoRA</div>
                   <div className={styles.moduleDesc}>Optional finetune adapter</div>
@@ -566,13 +639,16 @@ export default function Page() {
                   <button
                     type="button"
                     className={styles.advancedToggle}
-                    onClick={() => setAdvancedOpen((v) => !v)}
+                    onClick={toggleAdvanced}
+                    aria-expanded={advancedOpen}
+                    aria-controls="advanced-settings-panel"
                   >
                     <span className={styles.panelTitle}>Advanced Settings</span>
+                    <span className={styles.advancedState}>{advancedOpen ? "Expanded" : "Collapsed"}</span>
                     <span className={styles.advancedChevron}>{advancedOpen ? "▾" : "▸"}</span>
                   </button>
                   {advancedOpen ? (
-                    <div className={styles.advancedPanel}>
+                    <div id="advanced-settings-panel" className={styles.advancedPanel}>
                       <section className={styles.advancedSection}>
                         <div className={styles.advancedSectionHead}>
                           <div className={styles.sectionTitle}>ControlNet</div>
@@ -581,7 +657,7 @@ export default function Page() {
                               className={styles.switchInput}
                               type="checkbox"
                               checked={enableControlnet}
-                              onChange={(e) => setEnableControlnet(e.target.checked)}
+                              onChange={(e) => toggleControlnet("advanced", e.target.checked)}
                             />
                             <span className={styles.switchTrack} />
                             <span className={styles.switchText}>Enable</span>
@@ -656,7 +732,7 @@ export default function Page() {
                               className={styles.switchInput}
                               type="checkbox"
                               checked={enableLora}
-                              onChange={(e) => setEnableLora(e.target.checked)}
+                              onChange={(e) => toggleLora("advanced", e.target.checked)}
                             />
                             <span className={styles.switchTrack} />
                             <span className={styles.switchText}>Enable</span>

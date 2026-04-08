@@ -12,13 +12,20 @@ from api.infer import generate_image, image_to_png_bytes, save_png_to_outputs
 
 
 OUTPUT_DIR = os.environ.get("WEB_DEMO_OUTPUT_DIR", "/work/outputs/web_demo")
+CORS_ALLOW_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "WEB_DEMO_CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
+    if o.strip()
+]
 
 
 app = FastAPI(title="CrackTree Web Demo API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
