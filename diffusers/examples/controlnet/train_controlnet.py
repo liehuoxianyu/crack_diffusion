@@ -21,6 +21,7 @@ import math
 import os
 import random
 import shutil
+import sys
 from pathlib import Path
 
 import accelerate
@@ -36,6 +37,7 @@ from datasets import load_dataset
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from PIL import Image
+from safetensors.torch import load_file
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
@@ -54,6 +56,13 @@ from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from models.cafe import CAFEEmbedding
+from models.tag import inject_tag_into_controlnet
 
 
 if is_wandb_available():
@@ -84,7 +93,15 @@ def log_validation(
     if not is_final_validation:
         controlnet = accelerator.unwrap_model(controlnet)
     else:
-        controlnet = ControlNetModel.from_pretrained(args.output_dir, torch_dtype=weight_dtype)
+        base_controlnet_id = args.controlnet_model_name_or_path or "lllyasviel/sd-controlnet-seg"
+        controlnet = ControlNetModel.from_pretrained(base_controlnet_id, torch_dtype=weight_dtype)
+        controlnet.controlnet_cond_embedding = CAFEEmbedding()
+        controlnet = inject_tag_into_controlnet(controlnet)
+
+        ckpt_file = os.path.join(args.output_dir, "diffusion_pytorch_model.safetensors")
+        if not os.path.exists(ckpt_file):
+            ckpt_file = os.path.join(args.output_dir, "controlnet", "diffusion_pytorch_model.safetensors")
+        controlnet.load_state_dict(load_file(ckpt_file), strict=False)
 
     pipeline = StableDiffusionControlNetPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
@@ -812,6 +829,14 @@ def main(args):
     else:
         logger.info("Initializing controlnet weights from unet")
         controlnet = ControlNetModel.from_unet(unet)
+
+    # Replace native cond embedding with CAFE before optimizer creation.
+    controlnet.controlnet_cond_embedding = CAFEEmbedding()
+    controlnet_device = getattr(controlnet, "device", next(controlnet.parameters()).device)
+    controlnet_dtype = getattr(controlnet, "dtype", next(controlnet.parameters()).dtype)
+    controlnet.controlnet_cond_embedding.to(device=controlnet_device, dtype=controlnet_dtype)
+    controlnet.controlnet_cond_embedding.requires_grad_(True)
+    controlnet = inject_tag_into_controlnet(controlnet)
 
     # Taken from [Sayak Paul's Diffusers PR #6511](https://github.com/huggingface/diffusers/pull/6511/files)
     def unwrap_model(model):

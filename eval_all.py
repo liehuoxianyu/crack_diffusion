@@ -40,10 +40,15 @@ from diffusers import (
     StableDiffusionControlNetPipeline,
     UniPCMultistepScheduler,
 )
+from safetensors.torch import load_file
+
+from models.cafe import CAFEEmbedding
+from models.tag import inject_tag_into_controlnet
 
 # ===================== 配置区（只改这里） =====================
 # 评测输出四种形式：1=纯SD  2=SD+LoRA  3=SD+ControlNet(binary/DT)  4=SD+LoRA+ControlNet(binary/DT)
 BASE_MODEL = "runwayml/stable-diffusion-v1-5"
+CONTROLNET_BASE_MODEL = "lllyasviel/sd-controlnet-seg"
 
 # 两个实验run目录（里面有 checkpoint-500/1000/1500/2000/controlnet）
 RUN_BINARY = "/work/outputs/exp_binary_patch512"
@@ -117,7 +122,11 @@ def load_sd_pipe(device, dtype, use_lora=False):
 
 def load_cn_pipe(controlnet_dir, device, dtype, use_lora=False):
     """use_lora=False: SD+ControlNet；use_lora=True: SD+LoRA+ControlNet(需 LORA_PATH 有效）"""
-    controlnet = ControlNetModel.from_pretrained(controlnet_dir, torch_dtype=dtype)
+    ckpt_file = os.path.join(controlnet_dir, "diffusion_pytorch_model.safetensors")
+    controlnet = ControlNetModel.from_pretrained(CONTROLNET_BASE_MODEL, torch_dtype=dtype)
+    controlnet.controlnet_cond_embedding = CAFEEmbedding()
+    controlnet = inject_tag_into_controlnet(controlnet)
+    controlnet.load_state_dict(load_file(ckpt_file), strict=False)
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         BASE_MODEL,
         controlnet=controlnet,

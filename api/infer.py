@@ -16,10 +16,15 @@ from diffusers import (
     StableDiffusionPipeline,
     UniPCMultistepScheduler,
 )
+from safetensors.torch import load_file
+
+from models.cafe import CAFEEmbedding
+from models.tag import inject_tag_into_controlnet
 
 
 OUTPUT_DIR = os.environ.get("WEB_DEMO_OUTPUT_DIR", "/work/outputs/web_demo")
 SD_BASE_MODEL = os.environ.get("SD_BASE_MODEL", "runwayml/stable-diffusion-v1-5")
+CONTROLNET_BASE_MODEL = os.environ.get("CONTROLNET_BASE_MODEL", "lllyasviel/sd-controlnet-seg")
 
 CONTROLNET_BINARY_BASE_DIR = os.environ.get(
     "CONTROLNET_BINARY_BASE_DIR", "/work/outputs/exp_binary_patch512"
@@ -93,7 +98,11 @@ def _load_sd_pipe(lora_path: Optional[str]) -> "StableDiffusionPipeline":
 def _load_cn_pipe(controlnet_type: str, lora_path: Optional[str]) -> "StableDiffusionControlNetPipeline":
     device, dtype = _device_and_dtype()
     controlnet_dir = _ensure_controlnet_dir(controlnet_type)
-    controlnet = ControlNetModel.from_pretrained(controlnet_dir, torch_dtype=dtype)
+    ckpt_file = os.path.join(controlnet_dir, "diffusion_pytorch_model.safetensors")
+    controlnet = ControlNetModel.from_pretrained(CONTROLNET_BASE_MODEL, torch_dtype=dtype)
+    controlnet.controlnet_cond_embedding = CAFEEmbedding()
+    controlnet = inject_tag_into_controlnet(controlnet)
+    controlnet.load_state_dict(load_file(ckpt_file), strict=False)
 
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         SD_BASE_MODEL,
