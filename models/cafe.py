@@ -33,35 +33,44 @@ class CAFEEmbedding(nn.Module):
 
     def __init__(self, conditioning_embedding_channels=320, block_out_channels=(16, 32, 96, 256)):
         super().__init__()
+        # NOTE:
+        # The shipped checkpoints in `outputs/exp_dt_patch512` and `outputs/exp_binary_patch512`
+        # expect `controlnet_cond_embedding.blocks.{0..5}.{weight,bias}` to be *direct Conv2d modules*
+        # (no nested Sequential/attention blocks under `blocks`).
+        #
+        # Their shapes imply the following conv channel path (for default block_out_channels=(16,32,96,256)):
+        #   blocks: 16->16, 16->32(stride2), 32->32, 32->96(stride2), 96->96, 96->256(stride2)
+        # which yields /8 spatial downsampling.
+        self.act = nn.SiLU()
         self.conv_in = nn.Conv2d(3, block_out_channels[0], kernel_size=3, padding=1)
 
-        self.blocks = nn.ModuleList([])
-        prev_channel = block_out_channels[0]
+        self.blocks = nn.ModuleList()
+        # Layout: keep channels[i], then downsample+expand to channels[i+1], repeated.
+        # For N stages, blocks length becomes 2*(N-1) (default N=4 => blocks length 6).
+        for i in range(len(block_out_channels) - 1):
+            c = block_out_channels[i]
+            cn = block_out_channels[i + 1]
+            if i == 0:
+                # blocks[0] = c -> c
+                self.blocks.append(nn.Conv2d(c, c, kernel_size=3, padding=1, stride=1))
+            else:
+                # blocks[2*i] is the "keep" conv for the previous stage channels (added at previous iter)
+                # so nothing to do here.
+                pass
 
-        for i, channel in enumerate(block_out_channels):
-            # 基础特征提取
-            self.blocks.append(
-                nn.Sequential(
-                    nn.Conv2d(prev_channel, channel, kernel_size=3, padding=1),
-                    nn.SiLU(),
-                    nn.Conv2d(channel, channel, kernel_size=3, padding=1),
-                    nn.SiLU(),
-                )
-            )
-            # 插入空间注意力机制 (CAFE的核心创新)
-            self.blocks.append(SpatialAttention())
+            # blocks[2*i+1] = c -> cn with stride2
+            self.blocks.append(nn.Conv2d(c, cn, kernel_size=3, padding=1, stride=2))
 
-            # 降采样层 (除了最后一层外)
-            if i != len(block_out_channels) - 1:
-                self.blocks.append(nn.Conv2d(channel, channel, kernel_size=3, stride=2, padding=1))
-
-            prev_channel = channel
+            # blocks[2*i+2] (except after the last stage) = cn -> cn with stride1
+            # This matches that the checkpoint has no extra 256->256 conv before conv_out.
+            if i + 1 < len(block_out_channels) - 1:
+                self.blocks.append(nn.Conv2d(cn, cn, kernel_size=3, padding=1, stride=1))
 
         self.conv_out = nn.Conv2d(block_out_channels[-1], conditioning_embedding_channels, kernel_size=3, padding=1)
 
     def forward(self, conditioning):
         x = self.conv_in(conditioning)
         for module in self.blocks:
-            x = module(x)
+            x = self.act(module(x))
         x = self.conv_out(x)
         return x

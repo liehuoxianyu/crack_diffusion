@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ========== 数据加载配置（DT + CAFE） ==========
+# ========== 数据加载配置（Topology + updated prompts） ==========
 export CRACK_JSONL="/CrackTree260/train_linux_updated.jsonl"
-export CRACK_COND_DIR="/CrackTree260/cond_dt"
+export CRACK_COND_DIR="/CrackTree260/cond_topology"
+export CRACK_CROP_COND_DIR="/CrackTree260/cond_mask"
 
-# patch 策略
+# patch 策略：裁剪评分仍使用 binary mask，避免多通道拓扑图改变采样协议
 export CRACK_USE_PATCH="1"
 export CRACK_PATCH="512"
 export CRACK_TRY="30"
-export CRACK_TH="32"           # DT阈值（与你之前一致）
-export CRACK_P_RANDOM="0.0"    # 0表示纯裂缝优先；想学全局光影可设0.3
+export CRACK_TH="127"
+export CRACK_P_RANDOM="0.0"
 export CRACK_CROP_SEED="12345"
 
 # ========== 训练配置 ==========
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 export CONTROLNET_INIT="lllyasviel/sd-controlnet-seg"
-export OUTPUT_DIR="/work/outputs/exp_DT_CAFE_patch512"
+export OUTPUT_DIR="/work/outputs/exp_TOPOLOGY_patch512"
 
 mkdir -p "$OUTPUT_DIR"
 
 cd /work/diffusers/examples/controlnet
-
-# 可选：清 datasets 缓存，确保最新 loader 生效（重跑实验建议打开）
 rm -rf ~/.cache/huggingface/datasets ~/.cache/huggingface/modules/datasets_modules || true
 
 accelerate launch train_controlnet.py \
@@ -35,13 +34,13 @@ accelerate launch train_controlnet.py \
   --caption_column="text" \
   --resolution=512 \
   --learning_rate=5e-6 \
-  --train_batch_size=1 \
-  --gradient_accumulation_steps=8 \
+  --train_batch_size=2 \
+  --gradient_accumulation_steps=4 \
   --max_train_steps=2000 \
   --checkpointing_steps=500 \
   --validation_steps=500 \
   --validation_prompt "a photo of pavement crack, realistic texture, high detail, natural shadowing, realistic lighting" \
-  --validation_image "/CrackTree260/cond_dt/6192.png" \
+  --validation_image "/CrackTree260/cond_topology/6192.png" \
   --num_validation_images=4 \
   --mixed_precision="fp16" \
   --enable_xformers_memory_efficient_attention \

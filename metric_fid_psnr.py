@@ -1,8 +1,8 @@
 """
-FID 与 PSNR 评测：与 eval_all 输出对齐，仅针对固定 control_scale=1.0（与 metric_struct_align 一致）。
+FID / PSNR / SSIM / LPIPS 评测：与 eval_all 输出对齐，仅针对固定 control_scale=1.0（与 metric_struct_align 一致）。
 - 从 train_linux.jsonl 取 real 图路径（按 id 匹配 basename）。
 - 生成图路径：EVAL_ROOT/id{id}/controlnet_{mode}/step{step}/gs{gs}_cs{cs}.png。
-- PSNR：逐对 (生成图, real 图)，先统一尺寸再算。
+- PSNR / SSIM / LPIPS：逐对 (生成图, real 图)，先统一尺寸再算。
 - FID：按 (mode, step) 分别算 real 集合 vs 生成集合（需建临时目录或列表，clean-fid 支持路径列表时用列表）。
 """
 import os
@@ -13,22 +13,40 @@ import numpy as np
 from PIL import Image
 
 # ===================== 配置区 =====================
-EVAL_ROOT = "/work/outputs/exp_eval_all"
-EVAL_IDS_TXT = "/CrackTree260/eval_ids.txt"
-REAL_IMAGE_JSONL = "/CrackTree260/train_linux.jsonl"
+EVAL_ROOT = os.environ.get("EVAL_ROOT", "/work/outputs/exp_eval_all")
+EVAL_IDS_TXT = os.environ.get("EVAL_IDS_TXT", "/CrackTree260/eval_ids.txt")
+REAL_IMAGE_JSONL = os.environ.get("REAL_IMAGE_JSONL", "/CrackTree260/train_linux.jsonl")
+
+
+def _parse_int_list_env(name, default):
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    return [int(x.strip()) for x in raw.split(",") if x.strip()]
+
+
+def _parse_str_tuple_env(name, default):
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    return tuple(x.strip() for x in raw.split(",") if x.strip())
 
 # 与下游 structural 分析一致：只取 control_scale=1.0
 GS = 7.5
 CS = 1.0
 # 要评测的 step 列表（与 eval_all 的 CKPTS 一致）
-STEPS = [500, 1000, 1500, 2000]
+STEPS = _parse_int_list_env("STEPS", [500, 1000, 1500, 2000])
 # 要评测的 mode：controlnet_binary, controlnet_dt, controlnet_binary_lora, controlnet_dt_lora
-MODES = ("binary", "dt", "binary_lora", "dt_lora")
+MODES = _parse_str_tuple_env("MODES", ("binary", "dt", "binary_lora", "dt_lora"))
 
-OUT_PSNR_CSV = "/work/outputs/exp_eval_all/metric_psnr_per_image.csv"
-OUT_FID_PSNR_SUMMARY = "/work/outputs/exp_eval_all/metric_fid_psnr_summary.csv"
+OUT_PSNR_CSV = os.environ.get("OUT_PSNR_CSV", os.path.join(EVAL_ROOT, "metric_psnr_per_image.csv"))
+OUT_FID_PSNR_SUMMARY = os.environ.get(
+    "OUT_FID_PSNR_SUMMARY", os.path.join(EVAL_ROOT, "metric_fid_psnr_summary.csv")
+)
 # FID 计算设备（无显卡时用 "cpu"）
 FID_DEVICE = "cpu"
+LPIPS_DEVICE = os.environ.get("LPIPS_DEVICE", "cuda")
+LPIPS_NET = os.environ.get("LPIPS_NET", "squeeze")
 # ==================================================
 
 
@@ -84,6 +102,47 @@ def psnr_numpy(img1, img2, max_val=255.0):
     return float(10.0 * np.log10(max_val ** 2 / mse))
 
 
+def ssim_numpy(img1, img2):
+    try:
+        from skimage.metrics import structural_similarity
+    except ImportError:
+        return float("nan")
+    return float(structural_similarity(img1, img2, channel_axis=2, data_range=255))
+
+
+def init_lpips():
+    try:
+        import torch
+        import lpips
+    except ImportError:
+        print("WARNING: lpips not installed. pip install lpips. Skipping LPIPS.")
+        return None, None
+
+    device = LPIPS_DEVICE
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+    try:
+        model = lpips.LPIPS(net=LPIPS_NET).to(device)
+        model.eval()
+        return model, device
+    except Exception as exc:
+        print("WARNING: failed to initialize LPIPS:", exc)
+        return None, None
+
+
+def lpips_numpy(model, device, img1, img2):
+    if model is None:
+        return float("nan")
+    import torch
+
+    def to_tensor(x):
+        arr = np.asarray(x, dtype=np.float32) / 127.5 - 1.0
+        return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        return float(model(to_tensor(img1), to_tensor(img2)).item())
+
+
 def get_generated_path(eval_root, id_, mode, step, gs, cs):
     return os.path.join(
         eval_root,
@@ -100,6 +159,7 @@ def main():
     id_to_real = build_id_to_real_path(REAL_IMAGE_JSONL)
     if not id_to_real:
         print("WARNING: no real paths from", REAL_IMAGE_JSONL)
+    lpips_model, lpips_device = init_lpips()
 
     # ---------- PSNR 逐图 ----------
     psnr_rows = []
@@ -129,11 +189,21 @@ def main():
                     p = psnr_numpy(real_img, gen_resized)
                 except Exception:
                     p = float("nan")
+                try:
+                    ssim = ssim_numpy(real_img, gen_resized)
+                except Exception:
+                    ssim = float("nan")
+                try:
+                    lpips_score = lpips_numpy(lpips_model, lpips_device, real_img, gen_resized)
+                except Exception:
+                    lpips_score = float("nan")
                 psnr_rows.append({
                     "id": id_,
                     "mode": mode,
                     "step": step,
                     "psnr": p,
+                    "ssim": ssim,
+                    "lpips": lpips_score,
                     "real_path": real_path,
                     "gen_path": gen_path,
                 })
@@ -149,22 +219,33 @@ def main():
     from collections import defaultdict
     by_key = defaultdict(list)
     for r in psnr_rows:
-        by_key[(r["mode"], r["step"])].append(r["psnr"])
+        by_key[(r["mode"], r["step"])].append(r)
+
+    def finite_stats(rows, key):
+        vals = [r[key] for r in rows]
+        a = np.asarray(
+            [v for v in vals if isinstance(v, (int, float)) and not (isinstance(v, float) and np.isnan(v))],
+            dtype=np.float64,
+        )
+        if len(a) == 0:
+            return float("nan"), float("nan")
+        return float(np.mean(a)), float(np.median(a))
 
     summary_rows = []
-    for (mode, step), vals in sorted(by_key.items(), key=lambda x: (x[0][0], x[0][1])):
-        a = np.asarray([v for v in vals if isinstance(v, (int, float)) and not (isinstance(v, float) and np.isnan(v))], dtype=np.float64)
-        if len(a) == 0:
-            psnr_mean = psnr_median = float("nan")
-        else:
-            psnr_mean = float(np.mean(a))
-            psnr_median = float(np.median(a))
+    for (mode, step), rows in sorted(by_key.items(), key=lambda x: (x[0][0], x[0][1])):
+        psnr_mean, psnr_median = finite_stats(rows, "psnr")
+        ssim_mean, ssim_median = finite_stats(rows, "ssim")
+        lpips_mean, lpips_median = finite_stats(rows, "lpips")
         summary_rows.append({
             "mode": mode,
             "step": step,
-            "n_pairs": len(vals),
+            "n_pairs": len(rows),
             "psnr_mean": psnr_mean,
             "psnr_median": psnr_median,
+            "ssim_mean": ssim_mean,
+            "ssim_median": ssim_median,
+            "lpips_mean": lpips_mean,
+            "lpips_median": lpips_median,
         })
 
     # ---------- FID：每个 (mode, step) 一组 ----------
@@ -209,12 +290,34 @@ def main():
                 print("FID error", mode, step, e)
 
     with open(OUT_FID_PSNR_SUMMARY, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["mode", "step", "n_pairs", "psnr_mean", "psnr_median", "fid"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "mode",
+                "step",
+                "n_pairs",
+                "psnr_mean",
+                "psnr_median",
+                "ssim_mean",
+                "ssim_median",
+                "lpips_mean",
+                "lpips_median",
+                "fid",
+            ],
+        )
         writer.writeheader()
         writer.writerows(summary_rows)
     print("wrote:", OUT_FID_PSNR_SUMMARY)
     for s in summary_rows:
-        print(" ", s["mode"], "step%d" % s["step"], "psnr_mean=%.2f" % (s["psnr_mean"] if not np.isnan(s["psnr_mean"]) else float("nan")), "fid=%.2f" % (s["fid"] if not np.isnan(s["fid"]) else float("nan")))
+        print(
+            " ",
+            s["mode"],
+            "step%d" % s["step"],
+            "psnr_mean=%.2f" % (s["psnr_mean"] if not np.isnan(s["psnr_mean"]) else float("nan")),
+            "ssim_mean=%.4f" % (s["ssim_mean"] if not np.isnan(s["ssim_mean"]) else float("nan")),
+            "lpips_mean=%.4f" % (s["lpips_mean"] if not np.isnan(s["lpips_mean"]) else float("nan")),
+            "fid=%.2f" % (s["fid"] if not np.isnan(s["fid"]) else float("nan")),
+        )
 
 
 if __name__ == "__main__":

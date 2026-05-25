@@ -29,8 +29,12 @@ CONTROLNET_BASE_MODEL = os.environ.get("CONTROLNET_BASE_MODEL", "lllyasviel/sd-c
 CONTROLNET_BINARY_BASE_DIR = os.environ.get(
     "CONTROLNET_BINARY_BASE_DIR", "/work/outputs/exp_binary_patch512"
 )
-CONTROLNET_DT_BASE_DIR = os.environ.get("CONTROLNET_DT_BASE_DIR", "/work/outputs/exp_dt_patch512")
+CONTROLNET_DT_BASE_DIR = os.environ.get(
+    "CONTROLNET_DT_BASE_DIR", "/work/outputs/exp_DT_updated_prompt_patch512"
+)
 CONTROLNET_STEP = int(os.environ.get("CONTROLNET_STEP", "2000"))
+CONTROLNET_USE_CAFE = os.environ.get("CONTROLNET_USE_CAFE", "0") not in ("0", "false", "False", "")
+CONTROLNET_USE_TAG = os.environ.get("CONTROLNET_USE_TAG", "0") not in ("0", "false", "False", "")
 
 USE_FP16 = os.environ.get("WEB_DEMO_USE_FP16", "1") not in ("0", "false", "False", "")
 PIPE_CACHE_MAX = int(os.environ.get("WEB_DEMO_PIPE_CACHE_MAX", "2"))
@@ -100,9 +104,14 @@ def _load_cn_pipe(controlnet_type: str, lora_path: Optional[str]) -> "StableDiff
     controlnet_dir = _ensure_controlnet_dir(controlnet_type)
     ckpt_file = os.path.join(controlnet_dir, "diffusion_pytorch_model.safetensors")
     controlnet = ControlNetModel.from_pretrained(CONTROLNET_BASE_MODEL, torch_dtype=dtype)
-    controlnet.controlnet_cond_embedding = CAFEEmbedding()
-    controlnet = inject_tag_into_controlnet(controlnet)
+    if CONTROLNET_USE_CAFE:
+        controlnet.controlnet_cond_embedding = CAFEEmbedding()
+    if CONTROLNET_USE_TAG:
+        controlnet = inject_tag_into_controlnet(controlnet)
     controlnet.load_state_dict(load_file(ckpt_file), strict=False)
+    # Optional extension modules may be constructed with default dtype (float32).
+    # Cast the condition embedding to the pipeline dtype to avoid conv dtype mismatches.
+    controlnet.controlnet_cond_embedding = controlnet.controlnet_cond_embedding.to(dtype=dtype)
 
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         SD_BASE_MODEL,
@@ -218,7 +227,10 @@ def generate_image(
 
     if enable_controlnet:
         cond_img = _maybe_parse_condition_image(condition_image_bytes, width=width, height=height)
-        cache_key = f"cn::{(controlnet_type or '').strip().lower()}::{lora_path or ''}"
+        cache_key = (
+            f"cn::{(controlnet_type or '').strip().lower()}::step{CONTROLNET_STEP}::"
+            f"cafe{int(CONTROLNET_USE_CAFE)}::tag{int(CONTROLNET_USE_TAG)}::{lora_path or ''}"
+        )
 
         def loader():
             return _load_cn_pipe(controlnet_type=controlnet_type, lora_path=lora_path)
@@ -259,7 +271,8 @@ def generate_image(
         f"seed={seed_used}, steps={num_inference_steps}, guidance_scale={guidance_scale}, "
         f"size={width}x{height} (requested {req_width}x{req_height}), "
         f"enable_controlnet={enable_controlnet}, controlnet_type={controlnet_type}, "
-        f"controlnet_conditioning_scale={controlnet_conditioning_scale}, "
+        f"controlnet_step={CONTROLNET_STEP}, controlnet_conditioning_scale={controlnet_conditioning_scale}, "
+        f"controlnet_use_cafe={CONTROLNET_USE_CAFE}, controlnet_use_tag={CONTROLNET_USE_TAG}, "
         f"enable_lora={enable_lora}, lora_path={(lora_path or '')}, lora_scale={lora_scale}"
     )
     meta = InferMeta(mode=mode, seed_used=seed_used, config_summary=config_summary)

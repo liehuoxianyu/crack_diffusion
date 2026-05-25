@@ -74,6 +74,34 @@ check_min_version("0.27.0")
 logger = get_logger(__name__)
 
 
+def configure_controlnet_extensions(controlnet, args, dtype=None):
+    """Apply optional CAFE and TAG modules before training/loading weights."""
+    if getattr(args, "use_cafe", False):
+        controlnet.controlnet_cond_embedding = CAFEEmbedding()
+        controlnet_device = getattr(controlnet, "device", next(controlnet.parameters()).device)
+        controlnet_dtype = dtype or getattr(controlnet, "dtype", next(controlnet.parameters()).dtype)
+        controlnet.controlnet_cond_embedding.to(device=controlnet_device, dtype=controlnet_dtype)
+        controlnet.controlnet_cond_embedding.requires_grad_(True)
+    if getattr(args, "use_tag", False):
+        controlnet = inject_tag_into_controlnet(controlnet)
+    return controlnet
+
+
+def crack_weighted_mse_loss(model_pred, target, conditioning_image, alpha, threshold, dilate):
+    """Weight the denoising loss around crack/structure pixels from the condition map."""
+    per_pixel = F.mse_loss(model_pred.float(), target.float(), reduction="none")
+    crack_hint = conditioning_image.float().amax(dim=1, keepdim=True)
+    crack_hint = (crack_hint > threshold).float()
+    crack_hint = F.interpolate(crack_hint, size=model_pred.shape[-2:], mode="nearest")
+
+    if dilate > 0:
+        kernel_size = 2 * dilate + 1
+        crack_hint = F.max_pool2d(crack_hint, kernel_size=kernel_size, stride=1, padding=dilate)
+
+    weights = 1.0 + alpha * crack_hint
+    return (per_pixel * weights).mean()
+
+
 def image_grid(imgs, rows, cols):
     assert len(imgs) == rows * cols
 
@@ -95,8 +123,7 @@ def log_validation(
     else:
         base_controlnet_id = args.controlnet_model_name_or_path or "lllyasviel/sd-controlnet-seg"
         controlnet = ControlNetModel.from_pretrained(base_controlnet_id, torch_dtype=weight_dtype)
-        controlnet.controlnet_cond_embedding = CAFEEmbedding()
-        controlnet = inject_tag_into_controlnet(controlnet)
+        controlnet = configure_controlnet_extensions(controlnet, args, dtype=weight_dtype)
 
         ckpt_file = os.path.join(args.output_dir, "diffusion_pytorch_model.safetensors")
         if not os.path.exists(ckpt_file):
@@ -467,6 +494,39 @@ def parse_args(input_args=None):
         "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
     )
     parser.add_argument(
+        "--use_cafe",
+        action="store_true",
+        help="Replace the native ControlNet conditioning embedding with CAFE.",
+    )
+    parser.add_argument(
+        "--use_tag",
+        action="store_true",
+        help="Inject the time-adaptive gating module into ControlNet residual outputs.",
+    )
+    parser.add_argument(
+        "--crack_weighted_loss",
+        action="store_true",
+        help="Use condition-derived crack/structure pixels to up-weight the denoising loss.",
+    )
+    parser.add_argument(
+        "--crack_loss_alpha",
+        type=float,
+        default=2.0,
+        help="Extra loss weight for crack/structure latent cells when --crack_weighted_loss is enabled.",
+    )
+    parser.add_argument(
+        "--crack_loss_threshold",
+        type=float,
+        default=0.125,
+        help="Condition pixel threshold in [0, 1] for crack/structure weighting.",
+    )
+    parser.add_argument(
+        "--crack_loss_dilate",
+        type=int,
+        default=1,
+        help="Dilation radius on the latent loss grid for crack/structure weighting.",
+    )
+    parser.add_argument(
         "--set_grads_to_none",
         action="store_true",
         help=(
@@ -830,13 +890,8 @@ def main(args):
         logger.info("Initializing controlnet weights from unet")
         controlnet = ControlNetModel.from_unet(unet)
 
-    # Replace native cond embedding with CAFE before optimizer creation.
-    controlnet.controlnet_cond_embedding = CAFEEmbedding()
-    controlnet_device = getattr(controlnet, "device", next(controlnet.parameters()).device)
-    controlnet_dtype = getattr(controlnet, "dtype", next(controlnet.parameters()).dtype)
-    controlnet.controlnet_cond_embedding.to(device=controlnet_device, dtype=controlnet_dtype)
-    controlnet.controlnet_cond_embedding.requires_grad_(True)
-    controlnet = inject_tag_into_controlnet(controlnet)
+    # Optional local extensions are enabled explicitly by the run_*.sh wrappers.
+    controlnet = configure_controlnet_extensions(controlnet, args)
 
     # Taken from [Sayak Paul's Diffusers PR #6511](https://github.com/huggingface/diffusers/pull/6511/files)
     def unwrap_model(model):
@@ -1103,7 +1158,17 @@ def main(args):
                     target = noise_scheduler.get_velocity(latents, noise, timesteps)
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                if args.crack_weighted_loss:
+                    loss = crack_weighted_mse_loss(
+                        model_pred=model_pred,
+                        target=target,
+                        conditioning_image=controlnet_image,
+                        alpha=args.crack_loss_alpha,
+                        threshold=args.crack_loss_threshold,
+                        dilate=args.crack_loss_dilate,
+                    )
+                else:
+                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:

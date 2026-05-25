@@ -34,6 +34,7 @@ class CrackTreeControlNet(datasets.GeneratorBasedBuilder):
     def _generate_examples(self, jsonl_path):
         # ---- Config via env ----
         COND_DIR = _get_env("CRACK_COND_DIR", "/CrackTree260/cond_mask")
+        CROP_COND_DIR = _get_env("CRACK_CROP_COND_DIR", COND_DIR)
 
         USE_PATCH = _get_env("CRACK_USE_PATCH", "1") == "1"
         PATCH = int(_get_env("CRACK_PATCH", "512"))
@@ -65,18 +66,22 @@ class CrackTreeControlNet(datasets.GeneratorBasedBuilder):
                 if base in exclude_ids:
                     continue
                 cond_path = os.path.join(COND_DIR, base + ".png")
+                crop_cond_path = os.path.join(CROP_COND_DIR, base + ".png")
                 text = it.get("prompt", "")
 
                 if not os.path.exists(img_path):
                     raise FileNotFoundError(f"missing image: {img_path}")
                 if not os.path.exists(cond_path):
                     raise FileNotFoundError(f"missing conditioning_image: {cond_path}")
+                if not os.path.exists(crop_cond_path):
+                    raise FileNotFoundError(f"missing crop conditioning image: {crop_cond_path}")
 
                 img = Image.open(img_path).convert("RGB")
-                cond = Image.open(cond_path).convert("L")
+                cond = Image.open(cond_path).convert("RGB")
+                crop_cond = Image.open(crop_cond_path).convert("L")
 
                 if not USE_PATCH:
-                    yield train_idx, {"image": img, "conditioning_image": cond.convert("RGB"), "text": text}
+                    yield train_idx, {"image": img, "conditioning_image": cond, "text": text}
                     train_idx += 1
                     continue
 
@@ -84,11 +89,11 @@ class CrackTreeControlNet(datasets.GeneratorBasedBuilder):
                 if W < PATCH or H < PATCH:
                     img = img.resize((PATCH, PATCH), Image.BICUBIC)
                     cond = cond.resize((PATCH, PATCH), Image.BICUBIC)
-                    yield train_idx, {"image": img, "conditioning_image": cond.convert("RGB"), "text": text}
+                    yield train_idx, {"image": img, "conditioning_image": cond, "text": text}
                     train_idx += 1
                     continue
 
-                cond_np = np.array(cond, dtype=np.uint8)
+                crop_cond_np = np.array(crop_cond, dtype=np.uint8)
                 rng = random.Random(BASE_SEED + i)
 
                 use_random = (rng.random() < P_RANDOM)
@@ -102,7 +107,7 @@ class CrackTreeControlNet(datasets.GeneratorBasedBuilder):
                     for _ in range(TRY):
                         x = rng.randint(0, W - PATCH)
                         y = rng.randint(0, H - PATCH)
-                        patch = cond_np[y:y+PATCH, x:x+PATCH]
+                        patch = crop_cond_np[y:y+PATCH, x:x+PATCH]
                         score = float((patch > TH).mean())
                         if score > best_score:
                             best_score = score
@@ -110,7 +115,7 @@ class CrackTreeControlNet(datasets.GeneratorBasedBuilder):
                     x0, y0 = best
 
                 img_c = img.crop((x0, y0, x0 + PATCH, y0 + PATCH))
-                cond_c = cond.crop((x0, y0, x0 + PATCH, y0 + PATCH)).convert("RGB")
+                cond_c = cond.crop((x0, y0, x0 + PATCH, y0 + PATCH))
 
                 yield train_idx, {"image": img_c, "conditioning_image": cond_c, "text": text}
                 train_idx += 1

@@ -6,18 +6,18 @@ import numpy as np
 import cv2
 
 # ===================== 配置区（只改这里） =====================
-EVAL_ROOT = "/work/outputs/exp_eval_all"
+EVAL_ROOT = os.environ.get("EVAL_ROOT", "/work/outputs/exp_eval_all")
 
 # 评测哪些图片：匹配 eval_all 的 controlnet_*（含 binary/dt/binary_lora/dt_lora）
 GLOB_PATTERN = "id*/controlnet_*/step*/gs*_cs*.png"
 # 如果你只想评测最终一步：改成下面这行
 # GLOB_PATTERN = "id*/controlnet_*/step2000/gs*_cs*.png"
 
-COND_ROOT_BINARY = "/CrackTree260/cond_mask"
-COND_ROOT_DT     = "/CrackTree260/cond_dt"
+COND_ROOT_BINARY = os.environ.get("COND_ROOT_BINARY", "/CrackTree260/cond_mask")
+COND_ROOT_DT = os.environ.get("COND_ROOT_DT", "/CrackTree260/cond_dt")
 
-OUT_ALL_ROWS = "/work/outputs/exp_eval_all/metrics_all_rows.csv"
-OUT_SUMMARY  = "/work/outputs/exp_eval_all/metrics_summary_by_step.csv"
+OUT_ALL_ROWS = os.environ.get("OUT_ALL_ROWS", os.path.join(EVAL_ROOT, "metrics_all_rows.csv"))
+OUT_SUMMARY = os.environ.get("OUT_SUMMARY", os.path.join(EVAL_ROOT, "metrics_summary_by_step.csv"))
 
 DILATE = 5
 DT_TH = 32
@@ -166,19 +166,41 @@ def parse_from_path(gen_path):
     cs = float(m_gs.group(2)) if m_gs else float("nan")
     return id_, mode, step, gs, cs
 
-VALID_MODES = ("binary", "dt", "binary_lora", "dt_lora")
+VALID_MODES = (
+    "binary",
+    "dt",
+    "dt_updated_prompt",
+    "dt_tag",
+    "dt_cafe",
+    "dt_cafe_tag",
+    "topology",
+    "appearance",
+    "topology_weighted",
+    "binary_lora",
+    "dt_lora",
+)
 
 def get_cond_root(mode):
     """binary / binary_lora 用二值条件图；dt / dt_lora 用 DT 条件图。"""
-    if mode in ("binary", "binary_lora"):
+    if mode in ("binary", "binary_lora", "topology", "appearance", "topology_weighted"):
         return COND_ROOT_BINARY
-    if mode in ("dt", "dt_lora"):
+    if mode in ("dt", "dt_updated_prompt", "dt_tag", "dt_cafe", "dt_cafe_tag", "dt_lora"):
         return COND_ROOT_DT
     return None
 
 def cond_type_for_allow(mode):
     """用于 make_allow_region 的条件类型:binary 或 dt。"""
-    return "binary" if mode in ("binary", "binary_lora") else "dt"
+    return "binary" if mode in ("binary", "binary_lora", "topology", "appearance", "topology_weighted") else "dt"
+
+
+def resize_cond_to_gen(cond_gray, gen_bgr, cond_type):
+    """Resize condition maps to generated image size before pixel-wise metrics."""
+    gh, gw = gen_bgr.shape[:2]
+    if cond_gray.shape[:2] == (gh, gw):
+        return cond_gray
+    interp = cv2.INTER_NEAREST if cond_type == "binary" else cv2.INTER_LINEAR
+    return cv2.resize(cond_gray, (gw, gh), interpolation=interp)
+
 
 def summarize_group(values):
     a = np.asarray(values, dtype=np.float32)
@@ -214,12 +236,12 @@ def main():
         if not os.path.exists(cond_path):
             continue
 
-        cond = load_gray(cond_path)
-        allow = make_allow_region(cond, cond_type_for_allow(mode), DILATE, DT_TH)
-
         gen = cv2.imread(gp, cv2.IMREAD_COLOR)
         if gen is None:
             continue
+        cond_type = cond_type_for_allow(mode)
+        cond = resize_cond_to_gen(load_gray(cond_path), gen, cond_type)
+        allow = make_allow_region(cond, cond_type, DILATE, DT_TH)
         edge = edge_map(gen, CANNY1, CANNY2)
 
         chamfer, n_edge = chamfer_edge_to_allow(edge, allow, MAX_DIST)
@@ -229,7 +251,7 @@ def main():
         # IoU_r / Dice_r：GT 为裂缝二值图（cond_mask），与 pred 边缘在半径 r 膨胀后比对
         gt_bin_path = os.path.join(COND_ROOT_BINARY, f"{id_}.png")
         if os.path.exists(gt_bin_path):
-            gt_gray = load_gray(gt_bin_path)
+            gt_gray = resize_cond_to_gen(load_gray(gt_bin_path), gen, "binary")
             gt_bin = (gt_gray > 127).astype(np.uint8)
             iou_r, dice_r = iou_r_dice_r(edge.astype(np.uint8), gt_bin, R_IOU)
         else:

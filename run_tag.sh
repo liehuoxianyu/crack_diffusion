@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ========== 数据加载配置（DT + CAFE + TAG） ==========
+# ========== 数据加载配置（DT + TAG） ==========
 export CRACK_JSONL="/CrackTree260/train_linux_updated.jsonl"
 export CRACK_COND_DIR="/CrackTree260/cond_dt"
 
@@ -16,7 +16,7 @@ export CRACK_CROP_SEED="12345"
 # ========== 训练配置 ==========
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 export CONTROLNET_INIT="lllyasviel/sd-controlnet-seg"
-export OUTPUT_DIR="/work/outputs/exp_DT_CAFE_TAG_patch512"
+export OUTPUT_DIR="/work/outputs/exp_DT_TAG_patch512"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -45,6 +45,7 @@ accelerate launch train_controlnet.py \
   --num_validation_images=4 \
   --mixed_precision="fp16" \
   --enable_xformers_memory_efficient_attention \
+  --use_tag \
   --set_grads_to_none \
   --seed=42 \
   --report_to "tensorboard" \

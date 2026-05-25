@@ -1,8 +1,45 @@
 # Training / inference outputs (do not commit)
 outputs/
+crack_mask_diffusion/
 
 # Local workspace / cache files
 .cursor/
+.qoder/
 __pycache__/
 *.pyc
+*.pyo
 core.*
+
+# Virtual environments
+.venvs/
+.venv/
+venv/
+env/
+
+# Model weights, checkpoints, and run artifacts
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+checkpoints/
+logs/
+wandb/
+runs/
+tensorboard/
+*.tfevents.*
+
+# Documents / papers (non-code)
+*.pdf
+
+# Nested vendor git metadata (vendored as plain source)
+**/.git/
+
+# FreeControl sample data (large, reproducible locally)
+free_control/freecontrol/dataset/
+
+# OS / editor noise
+.DS_Store
+*.swp
+*.swo
+*~
